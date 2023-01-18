@@ -1,0 +1,266 @@
+---
+title: "Sit2Stand Analysis"
+author: "Melissa Boswell"
+date: "July 27, 2022"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+# Load libraries and requirements
+```{r, echo = FALSE}
+library(tidyverse)
+library(jtools)
+library(FSA)
+library(ggpubr)
+library(Hmisc)
+```
+
+# Load data
+```{r, echo = FALSE}
+df <- read.csv("dataClean.csv") # Numeric survey data
+```
+
+# Correlation matrix with significance fuction
+```{r, echo = FALSE}
+# x is a matrix containing the data
+# method : correlation method. "pearson"" or "spearman"" is supported
+# removeTriangle : remove upper or lower triangle
+# results :  if "html" or "latex"
+  # the results will be displayed in html or latex format
+corstars <-function(x, method=c("pearson", "spearman"), removeTriangle=c("upper", "lower"),
+                     result=c("none", "html", "latex")){
+    #Compute correlation matrix
+    require(Hmisc)
+    x <- as.matrix(x)
+    correlation_matrix<-rcorr(x, type=method[1])
+    R <- correlation_matrix$r # Matrix of correlation coeficients
+    p <- correlation_matrix$P # Matrix of p-value 
+    
+    ## Define notions for significance levels; spacing is important.
+    mystars <- ifelse(p < .0001, "****", ifelse(p < .001, "*** ", ifelse(p < .01, "**  ", ifelse(p < .05, "*   ", "    "))))
+    
+    ## trunctuate the correlation matrix to two decimal
+    R <- format(round(cbind(rep(-1.11, ncol(x)), R), 2))[,-1]
+    
+    ## build a new matrix that includes the correlations with their apropriate stars
+    Rnew <- matrix(paste(R, mystars, sep=""), ncol=ncol(x))
+    diag(Rnew) <- paste(diag(R), " ", sep="")
+    rownames(Rnew) <- colnames(x)
+    colnames(Rnew) <- paste(colnames(x), "", sep="")
+    
+    ## remove upper triangle of correlation matrix
+    if(removeTriangle[1]=="upper"){
+      Rnew <- as.matrix(Rnew)
+      Rnew[upper.tri(Rnew, diag = TRUE)] <- ""
+      Rnew <- as.data.frame(Rnew)
+    }
+    
+    ## remove lower triangle of correlation matrix
+    else if(removeTriangle[1]=="lower"){
+      Rnew <- as.matrix(Rnew)
+      Rnew[lower.tri(Rnew, diag = TRUE)] <- ""
+      Rnew <- as.data.frame(Rnew)
+    }
+    
+    ## remove last column and return the correlation matrix
+    Rnew <- cbind(Rnew[1:length(Rnew)-1])
+    if (result[1]=="none") return(Rnew)
+    else{
+      if(result[1]=="html") print(xtable(Rnew), type="html")
+      else print(xtable(Rnew), type="latex") 
+    }
+} 
+```
+
+# Variable name legend
+```{r}
+df_corr <- df[, c("Age", "Height", "Weight", "BMI", "Sex", "GT", "GPH_TScore", "GMH_TScore", "totalMET", "avgPEM", "avgAAM", "falling_1", "falling_2", "totalSEE", "OA_check", "totalWOMAC", "Fall_YN", "falls", "time", "right_ankle_max","right_ankle_min", "right_knee_max","right_knee_min", "right_hip_max","right_hip_min", "trunk_lean_max", "trunk_lean_ang_acc", "pelvic_max_y_acc")]
+print("Variable name legend")
+print("GPH_TScore: Global physical health t-score")
+print("GMH_TScore: Global mental health t-score")
+print("OA_check: Whether the individual has osteoarthritis (1) or not (0)")
+```
+# Filter age groups
+```{r}
+df_age50plus <- filter(df, ageGroup == "[50-80+")
+```
+
+# Descriptive tables
+```{r}
+# Removed subjects
+#df_removed <- df_all[! df_all_text$subjectid %in% df_text$subjectid,]
+
+# Simple data frames
+df.descr <- df[, c("Age", "Sex", "Height", "Weight", "BMI", "OA_check", "GPH_TScore", "GMH_TScore")]
+df_age50plus.descr <-df_age50plus[, c("Age", "Sex", "Height", "Weight", "BMI", "OA_check", "GPH_TScore", "GMH_TScore")]
+
+describe(df.descr)
+describe(df_age50plus.descr)
+```
+
+# View age bins
+```{r}
+summary(df$ageGroup)
+```
+
+# Overall timing
+# Mean Time
+```{r}
+# 18+
+summary(df$time)
+# Standard deviation
+sd(df$time)
+# Age bins
+tapply(df$time, df$ageGroup, summary)
+# Standard deviation
+tapply(df$time, df$ageGroup, sd)
+
+# T-tests
+x <- t.test(df$time[row(df)[which(df$ageGroup == "18-50)")]], df$time[row(df)[which(df$ageGroup == "[50-80+")]])
+x
+x$conf.int
+
+# Box Plot
+TimeAgeGroup <- tapply(df$time, df$ageGroup, summary)
+boxplot(TimeAgeGroup, xlab="Age Group", ylab="Time")
+```
+
+## Correlations
+
+```{r}
+corstars(df[, c("time", "trunk_lean_max_mean_sit2stand", "trunk_lean_max_ang_acc_sit2stand", "Age", "Sex", "BMI", "EthBin", "GPH_TScore", "GMH_TScore", "OA_check")])
+corstars(df_age50plus[, c("time", "trunk_lean_max_mean_sit2stand", "trunk_lean_max_ang_acc_sit2stand", "GPH_TScore", "GMH_TScore")])
+```
+
+# Analyses
+```{r, echo = FALSE}
+# Time predict GPH - control for age, sex, BMI
+summ(lm(df$GPH_TScore ~ scale(df$time) + scale(df$Age) + df$Sex + scale(df$BMI)),confint = TRUE, digits = 3)
+
+# Trunk lean max predict ethnicity status - control for time, age, sex, BMI
+# Kruskal-Wallis test
+## Because one ethnic group not normally distributed
+df.eth <- rbind(cbind(df$trunk_lean_max_mean_sit2stand[which(df$Ethnicity==1)], df$time[which(df$Ethnicity==1)], "White"), cbind(df$trunk_lean_max_mean_sit2stand[which(df$Ethnicity==2)], df$time[which(df$Ethnicity==2)], "Black"),  cbind(df$trunk_lean_max_mean_sit2stand[which(df$Ethnicity==3)], df$time[which(df$Ethnicity==3)], "Hispanic"), cbind(df$trunk_lean_max_mean_sit2stand[which(df$Ethnicity==4)], df$time[which(df$Ethnicity==4)], "Asian"))
+df.eth <- data.frame(df.eth)
+colnames(df.eth) <- c("trunk.lean", "time", "ethnicity")
+df.eth$ethnicity <- as.factor(df.eth$ethnicity)
+df.eth$trunk.lean <- as.numeric(df.eth$trunk.lean)
+df.eth$time <- as.numeric(df.eth$time)
+
+## Compute summary statistics
+group_by(df.eth, ethnicity) %>%
+  summarise(
+    count = n(),
+    mean = mean(trunk.lean, na.rm = TRUE),
+    sd = sd(trunk.lean, na.rm = TRUE),
+    median = median(trunk.lean, na.rm = TRUE),
+    IQR = IQR(trunk.lean, na.rm = TRUE)
+  )
+
+## Kruskal-Wallis
+kruskal.test(trunk.lean ~ ethnicity, data = df.eth)
+
+## Dunn's Test with Bonferroni correction for p-values
+dunnTest(trunk.lean ~ ethnicity, data = df.eth, method = "bh")
+
+# Control for other variables
+df.eth.bin <- data.frame(rbind(cbind(df$trunk_lean_max_mean_sit2stand[which(df$Ethnicity==1)], df$time[which(df$Ethnicity==1)], df$Age[which(df$Ethnicity==1)], df$Sex[which(df$Ethnicity==1)], df$BMI[which(df$Ethnicity==1)], df$GPH_TScore[which(df$Ethnicity==1)], 0), cbind(df$trunk_lean_max_mean_sit2stand[which(df$Ethnicity==4)], df$time[which(df$Ethnicity==4)], df$Age[which(df$Ethnicity==4)], df$Sex[which(df$Ethnicity==4)], df$BMI[which(df$Ethnicity==4)], df$GPH_TScore[which(df$Ethnicity==4)], 1)))
+colnames(df.eth.bin) <- c("trunk.lean", "time", "Age", "Sex", "BMI", "health", "ethnicity")
+
+## Binned ethnicity
+mod2 <- glm(formula = df.eth.bin$ethnicity ~ scale(df.eth.bin$trunk.lean) + scale(df.eth.bin$time) + scale(df.eth.bin$Age) + df.eth.bin$Sex + scale(df.eth.bin$BMI) + scale(df.eth.bin$health))
+
+summary(mod2, family = "binomial")
+confint(mod2)
+exp(coef(mod2))
+
+# OA status
+# Trunk lean max predict OA status - control for time, age, sex, BMI
+
+mod3 <- glm(df$OA_check ~ scale(df$time) + scale(df$Age) + df$Sex + scale(df$BMI))
+
+summary(mod3, family = "binomial")
+confint(mod3)
+exp(coef(mod3))
+
+mod4 <- glm(df$OA_check ~ scale(df$trunk_lean_max_mean_sit2stand) + scale(df$time) + scale(df$Age) + df$Sex + scale(df$BMI))
+
+summary(mod4, family = "binomial")
+confint(mod4)
+exp(coef(mod4))
+
+# Global mental health
+# Trunk acceleration max predict GMH - control for time, age, sex, BMI
+mod4 <- lm(df_age50plus$GMH_TScore ~ scale(df_age50plus$trunk_lean_max_ang_acc_sit2stand) + scale(df_age50plus$time) + scale(df_age50plus$Age) + df_age50plus$Sex + scale(df_age50plus$BMI))
+
+summ(mod4,confint = TRUE, digits = 3)
+confint(mod4)
+
+```
+
+# Plots
+```{r, echo = FALSE}
+# Age Bins
+TimeAgeGroup <- tapply(df$time, df$ageBin, summary)
+boxplot(TimeAgeGroup, xlab="Age Bin", ylab="Time")
+
+# Physical health vs. Time
+plot1 <- ggscatter(df_age50plus, x = "time", y = "GPH_TScore", xlab = "Time", size = 3, font.label = c(20, "plain"),
+  ylab = "Physical Health",
+   add = "reg.line",  # Add regressin line
+   add.params = list(color = "lightblue", fill = "lightgray"), # Customize reg. line
+   conf.int = TRUE # Add confidence interval
+   )
+plot1 + stat_cor(method = "pearson", label.x = 10, label.y = 70)
+
+# Age vs. Trunk Lean
+plot2 <- ggscatter(df_age50plus, x = "trunk_lean_max_mean_sit2stand", y = "Age", xlab = "Max Trunk Lean", size = 3, font.label = c(20, "plain"),
+  ylab = "Age",
+   add = "reg.line",  # Add regressin line
+   add.params = list(color = "lightblue", fill = "lightgray"), # Customize reg. line
+   conf.int = TRUE # Add confidence interval
+   )
+plot2 + stat_cor(method = "pearson", label.x = 190, label.y = 90)
+
+# Ethnicity vs. Trunk lean
+TrunkLean_Eth <- tapply(df$trunk_lean_max_mean_sit2stand, df$Ethnicity, summary)
+boxplot(TrunkLean_Eth, xlab="Ethnicity", ylab="Max Trunk Lean")
+
+# Osteoarthritis Status vs. trunk angle
+df$OA_check.fact <- as.factor(df$OA_check)
+ggplot(df, aes(x=OA_check.fact, y=trunk_lean_max_mean_sit2stand)) + 
+  geom_boxplot(fill="gray")+
+  labs(x="Osteoarthritis Status", y = "Max Trunk Lean")+
+  theme_classic()
+
+x <- t.test(df$trunk_lean_max_mean_sit2stand[row(df)[which(df$OA_check == 0)]], df$trunk_lean_max_mean_sit2stand[row(df)[which(df$OA_check == 1)]])
+x
+x$conf.int
+
+# Mental health vs. Trunk Acceleration
+plot3 <- ggscatter(df_age50plus, x = "trunk_lean_max_ang_acc_sit2stand", y = "GMH_TScore", xlab = "Max Trunk Acceleration", size = 3, font.label = c(20, "plain"),
+  ylab = "Mental Health",
+   add = "reg.line",  # Add regressin line
+   add.params = list(color = "lightblue", fill = "lightgray"), # Customize reg. line
+   conf.int = TRUE # Add confidence interval
+   )
+plot3 + stat_cor(method = "pearson", label.x = 250, label.y = 70)
+```
+
+# Corrections for multiple comparisons
+```{r, echo = TRUE}
+all.cors.p <- data.frame(cor.test(df$time,df$Age)$p.value, cor.test(df$time,df$Sex)$p.value, cor.test(df$time,df$BMI)$p.value, cor.test(df$time,df$EthBin)$p.value, cor.test(df$time,df$GPH_TScore)$p.value, cor.test(df$time,df$GMH_TScore)$p.value, cor.test(df$time,df$OA_check)$p.value, cor.test(df$trunk_lean_max_mean_sit2stand,df$Age)$p.value, cor.test(df$trunk_lean_max_mean_sit2stand,df$Sex)$p.value, cor.test(df$trunk_lean_max_mean_sit2stand,df$EthBin)$p.value, cor.test(df$trunk_lean_max_mean_sit2stand,df$BMI)$p.value, cor.test(df$trunk_lean_max_mean_sit2stand,df$GPH_TScore)$p.value, cor.test(df$trunk_lean_max_mean_sit2stand,df$GMH_TScore)$p.value, cor.test(df$trunk_lean_max_mean_sit2stand,df$OA_check)$p.value, cor.test(df$trunk_lean_max_ang_acc_sit2stand,df$Age)$p.value, cor.test(df$trunk_lean_max_ang_acc_sit2stand,df$Sex)$p.value, cor.test(df$trunk_lean_max_ang_acc_sit2stand,df$BMI)$p.value, cor.test(df$trunk_lean_max_ang_acc_sit2stand,df$EthBin)$p.value,  cor.test(df$trunk_lean_max_ang_acc_sit2stand,df$GPH_TScore)$p.value, cor.test(df$trunk_lean_max_ang_acc_sit2stand,df$GMH_TScore)$p.value, cor.test(df$trunk_lean_max_ang_acc_sit2stand,df$OA_check)$p.value)
+
+all.cors.p.adj <- p.adjust(all.cors.p, method = "fdr", n = length(all.cors.p))
+all.cors.p.adj
+
+all.cors.50.p <- data.frame(cor.test(df_age50plus$time,df_age50plus$GPH_TScore)$p.value, cor.test(df_age50plus$time,df_age50plus$GMH_TScore)$p.value, cor.test(df_age50plus$trunk_lean_max_mean_sit2stand,df_age50plus$GPH_TScore)$p.value, cor.test(df_age50plus$trunk_lean_max_mean_sit2stand,df_age50plus$GMH_TScore)$p.value, cor.test(df_age50plus$trunk_lean_max_ang_acc_sit2stand,df_age50plus$GPH_TScore)$p.value, cor.test(df_age50plus$trunk_lean_max_ang_acc_sit2stand,df_age50plus$GMH_TScore)$p.value)
+
+all.cors.50.p.adj <- p.adjust(all.cors.50.p, method = "fdr", n = length(all.cors.50.p))
+all.cors.50.p.adj
+```

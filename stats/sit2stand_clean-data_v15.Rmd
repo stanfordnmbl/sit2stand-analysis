@@ -1,0 +1,409 @@
+---
+title: "Sit2Stand Data Cleaning"
+author: "Melissa Boswell"
+date: "July 27, 2022"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+# Load libraries and requirements
+```{r, echo = FALSE}
+library(plyr)
+library(readxl)
+library(psych)
+library(tidyverse)
+library(sjmisc)
+library(stddiff)
+```
+
+# Load survey data and combine with video data
+```{r, echo = FALSE}
+# Load Data
+dataMovement <- read.csv("dataMovement.csv") # Sit-to-stand parameters
+dataSurvey <- read.csv("dataSurvey.csv") # Numeric survey data
+dataSurvey_text <- read.csv("dataSurvey_text.csv") # Qualitative survey data
+
+# Combine data frames based on subject ID
+colnames(dataSurvey)[which(names(dataSurvey) == "video")] <- "subjectid"
+df <- join(dataMovement, dataSurvey, by="subjectid", type="inner")
+colnames(dataSurvey_text)[which(names(dataSurvey_text) == "video")] <- "subjectid"
+df_text <- join(dataMovement, dataSurvey_text, by="subjectid", type="inner")
+
+# Remove participants with with bad videos
+dataBad <- read_excel("REMOVE_videos.xlsx")
+df <- df[! df$subjectid %in% dataBad$video,]
+df_text <- df_text[! df_text$subjectid %in% dataBad$video,]
+
+colnames(dataBad)[which(names(dataBad) == "video")] <- "subjectid"
+df_removed <- join(dataBad, dataSurvey, by="subjectid", type="inner")
+df_removed_text <- join(dataBad, dataSurvey_text, by="subjectid", type="inner")
+
+df_all = rbind(df[which(colnames(df)=="Age"):which(colnames(df)=="feedback_open")], df_removed[which(colnames(df_removed)=="Age"):which(colnames(df_removed)=="feedback_open")])
+df_all_text = rbind(df_text[which(colnames(df)=="Age"):which(colnames(df)=="feedback_open")], df_removed[which(colnames(df_removed)=="Age"):which(colnames(df_removed)=="feedback_open")])
+
+#Make Numeric
+df[] <- sapply(df, as.numeric)
+df_all[] <- sapply(df_all, as.numeric)
+df_removed[] <- sapply(df_removed, as.numeric)
+
+#Make NA's Zero
+df[is.na(df)] <- 0
+df_all[is.na(df_all)] <- 0
+df_removed[is.na(df_removed)] <- 0
+#df_removed[is.na(df_removed)] <- 0
+```
+
+# Adjust time based on n cycles detected
+```{r}
+df$time <- df$time/df$n * 5
+df <- subset( df, select = -n )
+```
+
+# Fix typos/units
+```{r, echo = FALSE}
+df$Weight[which(df_text$subjectid == "KHDHZ4c5")] <- 232 # typo
+df$Weight[which(df_text$subjectid == "xVeHS4j1")] <- 163 #kg to lbs
+df$Weight[which(df_text$subjectid == "hfnQyNnP")] <- 95 #kg to lbs
+
+df_all$Weight[which(df_text$subjectid == "KHDHZ4c5")] <- 232 # typo
+df_all$Weight[which(df_text$subjectid == "xVeHS4j1")] <- 163 #kg to lbs
+df_all$Weight[which(df_text$subjectid == "hfnQyNnP")] <- 95 #kg to lbs
+```
+
+# Survey measure calculations
+```{r, echo = FALSE}
+# Survey measure calculations
+
+# BMI
+df$BMI <- df$Weight / (df$Height)^2 * 703
+df_all$BMI <- df_all$Weight / (df_all$Height)^2 * 703
+df_removed$BMI <- df_removed$Weight / (df_removed$Height)^2 * 703
+
+# Promis Global Scale
+# Note: These were already reverse scored in qualtrics
+
+# Global Total
+df$GT <- rowSums(df[,c("Global01", "Global02", "Global03", "Global04", "Global05", "Global06", "Global07", "Global08", "Global09", "Global10")])
+
+# Global Mental Health T-score
+df$GMH_raw <- rowSums(df[,c("Global02", "Global04", "Global05", "Global10")])
+GMH_TScore <- read_excel("GMH_T-Score.xlsx")
+df$GMH_TScore <- GMH_TScore$`T-Score`[match(unlist(df$GMH_raw), GMH_TScore$`Raw Score`)]
+
+# Global Physical Health T-score
+df$GPH_raw <- rowSums(df[,c("Global03", "Global06", "Global07", "Global08")])
+GPH_TScore <- read_excel("GPH_T-Score.xlsx")
+df$GPH_TScore <- GPH_TScore$`T-Score`[match(unlist(df$GPH_raw), GPH_TScore$`Raw Score`)]
+
+# Physical Activity (IPAQ-SF)
+
+# Walking to minutes accounting for people that put in minutes
+df$IPAQ_SF_6_1[which(df$IPAQ_SF_6_1 <= 10)] <- df$IPAQ_SF_6_1[which(df$IPAQ_SF_6_1 <= 10)] * 60
+
+# Remove if < 10 minutes
+df$IPAQ_SF_2_2[which(df$IPAQ_SF_2_2 < 10)] = 0
+df$IPAQ_SF_4_2[which(df$IPAQ_SF_4_2 < 10)] = 0
+df$IPAQ_SF_6_1[which(df$IPAQ_SF_6_1 < 10)] = 0
+
+# New variables
+df$vigMins <- df$IPAQ_SF_2_2
+df$modMins <- df$IPAQ_SF_4_2
+df$walkMins <- df$IPAQ_SF_6_1
+
+# Truncate vigMins, modMins, and walkMins if >180 mintes
+df$vigMins[which(df$vigMins > 180)] = 180
+df$modMins[which(df$modMins > 180)] = 180
+df$walkMins[which(df$walkMins > 180)] = 180
+
+# Total time per week
+df$vigTime <- df$IPAQ_SF_1_1 * df$vigMins
+df$modTime <- df$IPAQ_SF_3_1 * df$modMins
+df$walkTime <- df$IPAQ_SF_5_1 * df$walkMins
+df$totalTime <- rowSums(df[,c("vigTime", "modTime", "walkTime")])
+
+# Remove outliers
+# Not currently removing outliers because there are a lot over the outlier time; likely because many people are active students in California
+# df <- df[-which(df$totalTime > 960)]
+
+# Calculate metabolic minutes
+df$vigMET <- 8 * df$vigTime
+df$modMET <- 4 * df$modTime
+df$walkMET <- 3.3 * df$walkTime
+df$totalMET <- rowSums(df[,c("vigMET", "modMET", "walkMET")])
+
+df$IPAQ_days <- df$IPAQ_SF_1_1_TEXT + df$IPAQ_SF_3_1_TEXT + df$IPAQ_SF_5_1_TEXT
+
+# Physical activity categories
+for (i in 1:length(df$totalMET)) {
+if(df$totalMET[i] >= 1500){
+  df$PA_cat[i] = 'High'
+} else if(df$totalMET[i] <= 1500 & df$totalMET[i] >= 600){
+  df$PA_cat[i] = 'Moderate'
+} else {
+  df$PA_cat[i] = 'Low'
+}}
+
+# Process Mindset
+df$avgPEM <- rowMeans(df[,c("PES_1", "PES_2", "PES_3", "PES_4", "PES_5", "PES_6", "PES_7")])
+
+# Adequacy Mindset
+df$avgAAM <- rowMeans(df[,c("amm_1", "amm_2", "amm_3", "amm_4", "amm_5")])
+
+# Self-Efficacy for Exercise
+# Sum the score (maximum 90)
+df$totalSEE <- rowMeans(df[,c("SEE_1", "SEE_2", "SEE_3", "SEE_4", "SEE_5", "SEE_6", "SEE_7", "SEE_8", "SEE_9")])
+
+# Set NA for 0's in step count and active time
+df$stepCount[df$stepCount == 0] <- NA
+df$activeTime[df$activeTime == 0] <- NA
+
+# WOMAC
+df$WOMAC_pain <- df$WOMAC_1_1 + df$WOMAC_1_2 + df$WOMAC_1_3 + df$WOMAC_1_4 + df$WOMAC_1_5 
+
+df$WOMAC_func <- df$WOMAC_3_1 + df$WOMAC_3_2 + df$WOMAC_3_3 + df$WOMAC_3_4 + df$WOMAC_3_5 + df$WOMAC_3_6 + df$WOMAC_3_7 + df$WOMAC_3_8 + df$WOMAC_3_9 + df$WOMAC_3_10 + df$WOMAC_3_11 + df$WOMAC_3_12 + df$WOMAC_3_13 + df$WOMAC_3_14 + df$WOMAC_3_15 + df$WOMAC_3_16
+
+df$WOMAC_stiff <- df$WOMAC_2_1 + df$WOMAC_2_2
+
+df$totalWOMAC <- df$WOMAC_pain + df$WOMAC_stiff + df$WOMAC_func
+
+df$totalWOMAC[df$totalWOMAC == 0] <- NA
+df$WOMAC_pain[df$WOMAC_pain == 0] <- NA
+df$WOMAC_func[df$WOMAC_func == 0] <- NA
+df$WOMAC_stiff[df$WOMAC_stiff == 0] <- NA
+
+# Number of falls not due to sports
+for (i in 1:length(df$Fall_YN)) {
+if(df$Fall_YN[i] == 1 && df$Fall_Reason[i] > 1){
+  df$falls[i] = df$Fall_.[i]
+} else {
+  df$falls[i] = 0
+}}
+
+# Binary had a fall not due to sports
+for (i in 1:length(df$Fall_YN)) {
+if(df$Fall_YN[i] == 1 && df$Fall_Reason[i] > 1){
+  df$fallsBin[i] = 1
+} else {
+  df$fallsBin[i] = 0
+}}
+
+# Number of medical conditions
+for (i in 1:length(df_text$MedicalConditions)) {
+if(str_count(df_text$MedicalConditions[i]) == 0){
+  df$numMedCond[i] = 0
+} else {
+  df$numMedCond[i] = str_count(df_text$MedicalConditions[i], ',') + 1
+}}
+
+# Bin number of medical conditions
+for (i in 1:length(df$numMedCond)) {
+if(df$numMedCond[i] == 0){
+  df$numMed_1[i] = 0
+} else {
+  df$numMed_1[i] = 1
+}}
+
+for (i in 1:length(df$numMedCond)) {
+if(df$numMedCond[i] <= 1){
+  df$numMed_2[i] = 0
+} else {
+  df$numMed_2[i] = 1
+}}
+
+# Recode ethnicities
+## White = 1 / Non-white = 0
+for (i in 1:length(df_text$Ethnicity)) {
+if(str_contains(df_text$Ethnicity[i], 'White')){
+  df$EthBin[i] = 1
+} else {
+  df$EthBin[i] = 0
+}}
+
+# Recode education
+## College degree or higher = 1
+for (i in 1:length(df$Education)) {
+if(df$Education[i] <= 3){
+  df$EduBin[i] = 0
+} else {
+  df$EduBin[i] = 1
+}}
+
+## Separate category per race with mixed as own category
+for (i in 1:length(df_text$Ethnicity)) {
+if(str_contains(df_text$Ethnicity[i], ',')){
+  df$EthCat[i] = 7
+} else if(str_contains(df_text$Ethnicity[i], 'White')){
+  df$EthCat[i] = 1
+} else if(str_contains(df_text$Ethnicity[i], 'Asian')){
+  df$EthCat[i] = 2
+} else if(str_contains(df_text$Ethnicity[i], 'African American')){
+  df$EthCat[i] = 3
+} else if(str_contains(df_text$Ethnicity[i], 'Hispanic')){
+  df$EthCat[i] = 4
+} else if(str_contains(df_text$Ethnicity[i], 'American Indian')){
+  df$EthCat[i] = 5
+} else if(str_contains(df_text$Ethnicity[i], 'Other')){
+  df$EthCat[i] = 6
+} else if(str_contains(df_text$Ethnicity[i], 'Not')){
+  df$EthCat[i] = 8
+} else {
+  df$EthCat[i] = 0
+}}
+
+df$backpain <- as.numeric(str_detect(df_text$MedicalConditions, "Back pain"))
+
+df$depression <- as.numeric(str_detect(df_text$MedicalConditions, "Depression"))
+
+df$highBP <- as.numeric(str_detect(df_text$MedicalConditions, "High blood pressure"))
+
+df$WOMAC_total <- sum(df$WOMAC_pain + df$WOMAC_stiff + df$WOMAC_func)
+```
+
+# Variable name legend
+```{r}
+df_corr <- df[, c("Age", "Height", "Weight", "BMI", "Sex", "GT", "GPH_TScore", "GMH_TScore", "totalMET", "avgPEM", "avgAAM", "falling_1", "falling_2", "totalSEE", "OA_check", "totalWOMAC", "Fall_YN", "falls", "time", "right_ankle_max","right_ankle_min", "right_knee_max","right_knee_min", "right_hip_max","right_hip_min", "trunk_lean_max", "trunk_lean_ang_acc", "pelvic_max_y_acc")]
+print("Variable name legend")
+print("GT: Global Health total score")
+print("GPH_TScore: Global physical health t-score")
+print("GMH_TScore: Global mental health t-score")
+print("totalMET: Physical activity (metabolic equivalent")
+print("avgPEM: Process of exercise mindset")
+print("avgPEM: Process of exercise mindset")
+print("avgAAM: Adequacy of activity mindset")
+print("falling_1: Fear of falling (0-10)")
+print("OA_check: Whether the individual has osteoarthritis (1) or not (0)")
+print("FAll_YN: Has had a fall in the past 12 months")
+print("falls: Number of falls in the past 12 months not due to sports")
+```
+
+# View distributions
+```{r}
+hist(df$time, breaks=50, main="Time dist with all")
+hist(df$trunk_lean_max_mean_sit2stand, breaks=50, main="Trunk lean with all")
+hist(df$trunk_lean_max_ang_acc_sit2stand, breaks=50, main="Trunk lean acc with all")
+```
+# Bin based on age
+```{r}
+# set up cut-off values 
+breaks <- c(18,20,30,40,50,60,70,80,100)
+# specify interval/bin labels
+tags <- c("18-20)","[20-30)", "[30-40)", "[40-50)", "[50-60)", "[60-70)","[70-80)", "[80+)")
+# bucketing values into bins
+df$ageBin <- cut(df$Age, 
+                  breaks=breaks, 
+                  include.lowest=TRUE, 
+                  right=FALSE, 
+                  labels=tags)
+# inspect bins
+summary(df$ageBin)
+
+# set up cut-off values 
+breaks <- c(18,30,50,70,100)
+# specify interval/bin labels
+tags <- c("[18-30)", "[30-50)", "[50-70)", "[70+)")
+# bucketing values into bins
+df$ageBin <- cut(df$Age, 
+                  breaks=breaks, 
+                  include.lowest=TRUE, 
+                  right=FALSE, 
+                  labels=tags)
+# inspect bins
+summary(df$ageBin)
+
+# Bin for 50 and over
+# set up cut-off values 
+breaks <- c(18,50,100)
+# specify interval/bin labels
+tags <- c("18-50)","[50-80+")
+# bucketing values into bins
+df$ageGroup <- cut(df$Age, 
+                  breaks=breaks, 
+                  include.lowest=TRUE, 
+                  right=FALSE, 
+                  labels=tags)
+
+df_text$ageGroup <- cut(df$Age, 
+                  breaks=breaks, 
+                  include.lowest=TRUE, 
+                  right=FALSE, 
+                  labels=tags)
+# inspect bins
+summary(df$ageGroup)
+```
+
+# Filter age groups
+```{r}
+df_age50plus <- filter(df, ageGroup == "[50-80+")
+df_age50plus_text <- filter(df_text, ageGroup == "[50-80+")
+```
+
+# Descriptive tables
+```{r}
+# Removed subjects
+#df_removed <- df_all[! df_all_text$subjectid %in% df_text$subjectid,]
+
+# Simple data frames
+df.descr <- df[, c("Sex", "Age", "BMI")]
+df_all.descr <- df_all[, c("Sex", "Age", "BMI")]
+df_removed.descr <- df_removed[, c("Sex", "Age", "BMI")]
+
+describe(df.descr)
+describe(df_all.descr)
+describe(df_removed.descr)
+```
+
+
+# Standardized Mean Difference (between included and excluded)
+```{r}
+df_removed.descr$group = 0
+df.descr$group = 1
+dfSMD = rbind(df_removed.descr, df.descr)
+stddiff.numeric(data=dfSMD, gcol=4, vcol=(1:3))
+```
+
+# 5STS Measures Descriptive tables
+```{r}
+# Removed subjects
+#df_removed <- df_all[! df_all_text$subjectid %in% df_text$subjectid,]
+
+# Simple data frames
+df.5STS <- df[, c("time", "trunk_lean_max_mean_sit2stand", "trunk_lean_max_ang_acc_sit2stand")]
+df_50.5STS <- df_age50plus[, c("time", "trunk_lean_max_mean_sit2stand", "trunk_lean_max_ang_acc_sit2stand")]
+
+describe(df.5STS)
+describe(df_50.5STS)
+```
+
+# Summarize Participant Characteristics and Variables
+```{r}
+# Create an extended statistics table
+d.summary.extended <- df %>%
+    select(Age, Height, Weight, BMI, Sex, Sex, Smoker, GT, GPH_TScore, GMH_TScore, totalMET,stepCount, activeTime, avgPEM, avgAAM, Fall_YN, falls, falling_1, falling_2, falling_3, totalSEE, OA_check, OA_yrsdiag, totalWOMAC, time, trunk_lean_max_mean_sit2stand, trunk_lean_max_ang_acc_sit2stand) %>%
+    psych::describe(quant=c(.25,.75)) %>%
+    as_tibble(rownames="rowname")  %>%
+    print()
+
+d.summary.extended <- df_age50plus %>%
+    select(Age, Height, Weight, BMI, Sex, Sex, Smoker, GT, GPH_TScore, GMH_TScore, totalMET,stepCount, activeTime, avgPEM, avgAAM, Fall_YN, falls, falling_1, falling_2, falling_3, totalSEE, OA_check, OA_yrsdiag, totalWOMAC, time, trunk_lean_max_mean_sit2stand, trunk_lean_max_ang_acc_sit2stand) %>%
+    psych::describe(quant=c(.25,.75)) %>%
+    as_tibble(rownames="rowname")  %>%
+    print()
+```
+
+# Participant feedback
+```{r, echo = FALSE}
+# Mean and SD
+mean(df_all$difficult_scale)
+sd(df$difficult_scale)
+
+# Qualitative feedback
+feedback <- df_all_text[, c("difficult_open", "feedback_open")]
+write.csv(feedback,"feedback.csv", row.names = FALSE)
+```
+
+# Export cleaned data frame
+```{r}
+write.csv(df,"dataClean.csv", row.names = FALSE)
+write.csv(df_text,"dataClean_text.csv", row.names = FALSE)
+```
